@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
 )
 
 var (
@@ -64,15 +63,15 @@ var (
 		{int64(os.O_WRONLY), "WRONLY"},
 		{int64(os.O_RDWR), "RDWR"},
 		{int64(os.O_APPEND), "APPEND"},
-		{int64(syscall.O_ASYNC), "ASYNC"},
+		{int64(syscall_O_ASYNC), "ASYNC"},
 		{int64(os.O_CREATE), "CREAT"},
 		{int64(os.O_EXCL), "EXCL"},
-		{int64(syscall.O_NOCTTY), "NOCTTY"},
-		{int64(syscall.O_NONBLOCK), "NONBLOCK"},
+		{int64(syscall_O_NOCTTY), "NOCTTY"},
+		{int64(syscall_O_NONBLOCK), "NONBLOCK"},
 		{int64(os.O_SYNC), "SYNC"},
 		{int64(os.O_TRUNC), "TRUNC"},
-		{int64(syscall.O_CLOEXEC), "CLOEXEC"},
-		{int64(syscall.O_DIRECTORY), "DIRECTORY"},
+		{int64(syscall_O_CLOEXEC), "CLOEXEC"},
+		{int64(syscall_O_DIRECTORY), "DIRECTORY"},
 	})
 	fuseOpenFlagNames = newFlagNames([]flagNameEntry{
 		{FOPEN_DIRECT_IO, "DIRECT"},

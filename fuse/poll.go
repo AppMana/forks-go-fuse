@@ -1,3 +1,5 @@
+//go:build !windows
+
 package fuse
 
 // Go 1.9 introduces polling for file I/O. The implementation causes

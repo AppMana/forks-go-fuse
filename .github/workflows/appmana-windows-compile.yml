@@ -1,0 +1,38 @@
+name: AppMana Windows compile gate
+
+on:
+  push:
+    branches: [appmana/windows-compile]
+  pull_request:
+    branches: [appmana/windows-compile]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - name: Cross-compile fuse package for windows/amd64
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./fuse
+      - name: Vet fuse package for windows/amd64
+        run: GOOS=windows GOARCH=amd64 go vet ./fuse
+
+  linux-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - name: Build all packages
+        run: go build ./...
+      - name: Test fuse package
+        run: go test -count=1 ./fuse
+      - name: Test fs package
+        run: sudo -E env "PATH=$PATH" go test -count=1 -timeout 10m ./fs
