@@ -132,7 +132,10 @@
 // the Dev field in the Stat_t result for a file in the mount.
 package fuse
 
-import "log"
+import (
+	"log"
+	"time"
+)
 
 // Types for users to implement.
 
@@ -365,6 +368,21 @@ type MountOptions struct {
 	// MaxStackDepth is the maximum stacking depth for passthrough files.
 	// If unset, the default is 1.
 	MaxStackDepth int
+
+	// RequestTimeout, if set, bounds how long a request waits for the file
+	// system. A request still running when it expires is answered with EIO
+	// and its cancel channel is closed; the late result is discarded. The
+	// kernel waits for some requests uninterruptibly, such as the FLUSH sent
+	// when a killed process closes its files, so an unanswered request can
+	// otherwise hold a task in D state indefinitely.
+	RequestTimeout time.Duration
+
+	// KernelRequestTimeout, if set, is negotiated at FUSE_INIT on kernels
+	// that support request timeouts (Linux 6.14+). The kernel aborts the
+	// connection when any request stays unanswered for longer, whatever the
+	// server is doing. It is rounded down to whole seconds. Set it above
+	// RequestTimeout so the server answers first.
+	KernelRequestTimeout time.Duration
 
 	// RawFileSystem, if set, enables an ID-mapped mount if the Kernel supports
 	// it.

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -52,6 +53,10 @@ type Server struct {
 
 	// I/O with kernel and daemon.
 	mountFd int
+
+	// mountFdClosed is set under writeMu once Serve closes mountFd, so a
+	// late RequestTimeout reply cannot write to a reused descriptor.
+	mountFdClosed bool
 
 	opts *MountOptions
 
@@ -461,6 +466,7 @@ func (ms *Server) Serve() {
 
 	ms.writeMu.Lock()
 	syscall.Close(ms.mountFd)
+	ms.mountFdClosed = true
 	ms.writeMu.Unlock()
 
 	// shutdown in-flight cache retrieves.
@@ -596,7 +602,13 @@ func (ms *Server) handleRequest(req *requestAlloc) Status {
 		req.outPayload = ms.buffers.AllocBuffer(uint32(outPayloadSize))
 		req.bufferPoolOutputBuf = req.outPayload
 	}
-	ms.protocolServer.handleRequest(h, &req.request)
+	if !ms.serveWithinDeadline(h, req) {
+		// Already answered with EIO; the late result is discarded.
+		if req.readResult != nil {
+			req.readResult.Done()
+		}
+		return OK
+	}
 	if req.suppressReply {
 		return OK
 	}
@@ -621,6 +633,62 @@ func (ms *Server) handleRequest(req *requestAlloc) Status {
 		}
 	}
 	return errno
+}
+
+const (
+	requestRunning int32 = iota
+	requestAnswered
+	requestTimedOut
+)
+
+// serveWithinDeadline runs the request and reports whether its own reply is
+// still to be written. With RequestTimeout set, a timer answers a request
+// that outlives it with EIO and cancels it, and the request's own result is
+// then discarded.
+func (ms *Server) serveWithinDeadline(h *operationHandler, req *requestAlloc) bool {
+	opcode := req.inHeader().Opcode
+	if ms.opts.RequestTimeout <= 0 || !boundedOpcode(opcode) {
+		ms.protocolServer.handleRequest(h, &req.request)
+		return true
+	}
+	unique := req.inHeader().Unique
+	var state atomic.Int32
+	timer := time.AfterFunc(ms.opts.RequestTimeout, func() {
+		if !state.CompareAndSwap(requestRunning, requestTimedOut) {
+			return
+		}
+		ms.interruptRequest(unique)
+		ms.writeTimeoutReply(unique, opcode)
+	})
+	ms.protocolServer.handleRequest(h, &req.request)
+	timer.Stop()
+	return state.CompareAndSwap(requestRunning, requestAnswered)
+}
+
+// boundedOpcode reports whether RequestTimeout applies to opcode: every
+// request the kernel waits a reply for, except connection setup and teardown.
+func boundedOpcode(opcode uint32) bool {
+	switch opcode {
+	case _OP_INIT, _OP_DESTROY, _OP_FORGET, _OP_BATCH_FORGET, _OP_INTERRUPT, _OP_NOTIFY_REPLY:
+		return false
+	}
+	return true
+}
+
+func (ms *Server) writeTimeoutReply(unique uint64, opcode uint32) {
+	out := OutHeader{Length: uint32(sizeOfOutHeader), Status: -int32(EIO), Unique: unique}
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(&out)), sizeOfOutHeader)
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+	if ms.mountFdClosed {
+		return
+	}
+	err := handleEINTR(func() error {
+		_, err := syscall.Write(ms.mountFd, buf)
+		return err
+	})
+	ms.opts.Logger.Printf("%s request %d unanswered after %v, replied EIO: %v",
+		operationName(opcode), unique, ms.opts.RequestTimeout, ToStatus(err))
 }
 
 func (ms *Server) notifyWrite(req *request) Status {

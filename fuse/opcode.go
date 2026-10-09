@@ -10,8 +10,10 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"math"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -127,6 +129,14 @@ func doInit(server *protocolServer, req *request) {
 		kernelFlags |= input.Flags64() & CAP_AUTO_INVAL_DATA
 	}
 
+	requestTimeoutSec := uint64(server.opts.KernelRequestTimeout / time.Second)
+	if requestTimeoutSec > math.MaxUint16 {
+		requestTimeoutSec = math.MaxUint16
+	}
+	if requestTimeoutSec > 0 {
+		kernelFlags |= input.Flags64() & CAP_REQUEST_TIMEOUT
+	}
+
 	kernelFlags = kernelFlags &^ server.opts.DisabledCapabilities
 
 	// maxPages is the maximum request size we want the kernel to use, in units of
@@ -151,6 +161,9 @@ func doInit(server *protocolServer, req *request) {
 		MaxStackDepth:       uint32(server.opts.MaxStackDepth),
 	}
 	out.setFlags(kernelFlags)
+	if kernelFlags&CAP_REQUEST_TIMEOUT != 0 {
+		out.RequestTimeout = uint16(requestTimeoutSec)
+	}
 	if server.opts.MaxReadAhead != 0 && uint32(server.opts.MaxReadAhead) < out.MaxReadAhead {
 		out.MaxReadAhead = uint32(server.opts.MaxReadAhead)
 	}
