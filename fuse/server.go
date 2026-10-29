@@ -647,22 +647,49 @@ const (
 // then discarded.
 func (ms *Server) serveWithinDeadline(h *operationHandler, req *requestAlloc) bool {
 	opcode := req.inHeader().Opcode
-	if ms.opts.RequestTimeout <= 0 || !boundedOpcode(opcode) {
+	deadline := ms.requestDeadline(opcode)
+	if deadline <= 0 {
 		ms.protocolServer.handleRequest(h, &req.request)
 		return true
 	}
 	unique := req.inHeader().Unique
 	var state atomic.Int32
-	timer := time.AfterFunc(ms.opts.RequestTimeout, func() {
+	timer := time.AfterFunc(deadline, func() {
 		if !state.CompareAndSwap(requestRunning, requestTimedOut) {
 			return
 		}
 		ms.interruptRequest(unique)
-		ms.writeTimeoutReply(unique, opcode)
+		ms.writeTimeoutReply(unique, opcode, deadline)
 	})
 	ms.protocolServer.handleRequest(h, &req.request)
 	timer.Stop()
 	return state.CompareAndSwap(requestRunning, requestAnswered)
+}
+
+// requestDeadline is how long opcode may run before it is answered with EIO,
+// or 0 for no deadline.
+func (ms *Server) requestDeadline(opcode uint32) time.Duration {
+	if !boundedOpcode(opcode) {
+		return 0
+	}
+	if ms.opts.MetadataRequestTimeout > 0 && metadataOpcode(opcode) {
+		return ms.opts.MetadataRequestTimeout
+	}
+	return ms.opts.RequestTimeout
+}
+
+// metadataOpcode reports whether opcode is a namespace request, the kind the
+// kernel may issue several of under one directory or inode lock.
+func metadataOpcode(opcode uint32) bool {
+	switch opcode {
+	case _OP_LOOKUP, _OP_GETATTR, _OP_SETATTR, _OP_READLINK, _OP_SYMLINK,
+		_OP_MKNOD, _OP_MKDIR, _OP_UNLINK, _OP_RMDIR, _OP_RENAME, _OP_RENAME2,
+		_OP_LINK, _OP_OPEN, _OP_OPENDIR, _OP_READDIR, _OP_READDIRPLUS,
+		_OP_STATFS, _OP_ACCESS, _OP_CREATE, _OP_TMPFILE, _OP_STATX,
+		_OP_SETXATTR, _OP_GETXATTR, _OP_LISTXATTR, _OP_REMOVEXATTR:
+		return true
+	}
+	return false
 }
 
 // boundedOpcode reports whether RequestTimeout applies to opcode: every
@@ -675,7 +702,7 @@ func boundedOpcode(opcode uint32) bool {
 	return true
 }
 
-func (ms *Server) writeTimeoutReply(unique uint64, opcode uint32) {
+func (ms *Server) writeTimeoutReply(unique uint64, opcode uint32, deadline time.Duration) {
 	out := OutHeader{Length: uint32(sizeOfOutHeader), Status: -int32(EIO), Unique: unique}
 	buf := unsafe.Slice((*byte)(unsafe.Pointer(&out)), sizeOfOutHeader)
 	ms.writeMu.Lock()
@@ -688,7 +715,7 @@ func (ms *Server) writeTimeoutReply(unique uint64, opcode uint32) {
 		return err
 	})
 	ms.opts.Logger.Printf("%s request %d unanswered after %v, replied EIO: %v",
-		operationName(opcode), unique, ms.opts.RequestTimeout, ToStatus(err))
+		operationName(opcode), unique, deadline, ToStatus(err))
 }
 
 func (ms *Server) notifyWrite(req *request) Status {

@@ -155,3 +155,42 @@ func TestKernelRequestTimeoutAbortsConnection(t *testing.T) {
 		t.Fatalf("kernel did not abort the connection within %v", timeout+20*time.Second)
 	}
 }
+
+// Namespace requests can be chained under one directory lock (an O_CREAT
+// open sends LOOKUP then CREATE while holding the parent's i_rwsem), so each
+// must be answered well within the hung-task watchdog divided by the chain
+// length: MetadataRequestTimeout answers them before RequestTimeout.
+func TestMetadataRequestTimeoutAnswersStuckLookupFirst(t *testing.T) {
+	const metadata = 1 * time.Second
+	dir, _ := mountStuckFS(t, MountOptions{RequestTimeout: 30 * time.Second, MetadataRequestTimeout: metadata})
+
+	start := time.Now()
+	_, err := os.Lstat(filepath.Join(dir, "stuck"))
+	if !errors.Is(err, syscall.EIO) {
+		t.Fatalf("stuck lookup returned %v, want EIO", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*metadata {
+		t.Fatalf("stuck lookup took %v, want about %v", elapsed, metadata)
+	}
+}
+
+// Data requests such as the FLUSH of a large write-back keep the general
+// RequestTimeout: their work legitimately takes longer than a lookup.
+func TestMetadataRequestTimeoutLeavesDataRequestsTheGeneralDeadline(t *testing.T) {
+	const general = 3 * time.Second
+	dir, _ := mountStuckFS(t, MountOptions{RequestTimeout: general, MetadataRequestTimeout: 500 * time.Millisecond})
+
+	f, err := os.Open(filepath.Join(dir, "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	err = f.Close()
+	elapsed := time.Since(start)
+	if !errors.Is(err, syscall.EIO) {
+		t.Fatalf("stuck flush returned %v, want EIO", err)
+	}
+	if elapsed < general-500*time.Millisecond || elapsed > 3*general {
+		t.Fatalf("stuck flush answered after %v, want about %v", elapsed, general)
+	}
+}

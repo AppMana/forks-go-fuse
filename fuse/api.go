@@ -377,6 +377,14 @@ type MountOptions struct {
 	// otherwise hold a task in D state indefinitely.
 	RequestTimeout time.Duration
 
+	// MetadataRequestTimeout, if set, replaces RequestTimeout for namespace
+	// requests (lookup, attributes, create, rename, readdir, xattrs, ...).
+	// The kernel can send several of them while holding one directory lock,
+	// such as LOOKUP then CREATE for an O_CREAT open, so their sum must stay
+	// below the hung-task watchdog. Data, sync and lock requests keep
+	// RequestTimeout.
+	MetadataRequestTimeout time.Duration
+
 	// KernelRequestTimeout, if set, is negotiated at FUSE_INIT on kernels
 	// that support request timeouts (Linux 6.14+). The kernel aborts the
 	// connection when any request stays unanswered for longer, whatever the
